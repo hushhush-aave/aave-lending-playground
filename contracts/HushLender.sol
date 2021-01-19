@@ -62,7 +62,10 @@ contract HushLender is IHushLender, IFlashLoanReceiver {
     }
 
     modifier onlyOwner() {
-        require(msg.sender == owner, "Not owner");
+        require(
+            msg.sender == owner || msg.sender == address(this),
+            "Not owner"
+        );
         _;
     }
 
@@ -197,16 +200,16 @@ contract HushLender is IHushLender, IFlashLoanReceiver {
     ////////////////
 
     /**
-    * @notice Initiates a flashloan of `_amountBorrowed` of `_asset` that is to be swapped at 1inch with `_inchdata`. 
-    * @param _asset The asset we want to borrow
-    * @param _amountBorrowed The amount of the asset we want to borrow
-    * @param _inchdata calldata used for the swap. 
+     * @notice Initiates a flashloan of `_amountBorrowed` of `_asset` that is to be swapped at 1inch with `_params`.
+     * @param _asset The asset we want to borrow
+     * @param _amountBorrowed The amount of the asset we want to borrow
+     * @param _params calldata used for the swap.
      */
     function takeFlashloan(
         address _asset,
         uint256 _amountBorrowed,
-        bytes calldata _inchdata
-    ) public {
+        bytes calldata _params
+    ) public onlyOwner {
         address[] memory assets = new address[](1);
         assets[0] = _asset;
 
@@ -227,7 +230,7 @@ contract HushLender is IHushLender, IFlashLoanReceiver {
             amounts,
             modes,
             address(this), // onBehalfOf
-            _inchdata, //params
+            _params, //params
             0 // referralcode
         );
     }
@@ -249,9 +252,8 @@ contract HushLender is IHushLender, IFlashLoanReceiver {
         bytes calldata params
     ) external override returns (bool) {
         // I have funds here. Time to do nice stuff!
-        if (false) {
-            initiator;
-        }
+        // Ensure that we are the initiator.
+        require(initiator == address(this), "HushLender is not initiator");
 
         // Superlong ETH! Here we have only 1 asset.
         uint256 owns = amounts[0].add(premiums[0]);
@@ -269,28 +271,31 @@ contract HushLender is IHushLender, IFlashLoanReceiver {
      * @param _asset The asset that it receives
      * @param _amountBorrowed The amount it receives
      * @param _amountPayback The amount to pay back
-     * @param _inchdata The 1inch swap data
+     * @param _params The 1inch swap data
      */
     function _superLongEth(
         address _asset,
         uint256 _amountBorrowed,
         uint256 _amountPayback,
-        bytes calldata _inchdata
+        bytes calldata _params
     ) internal {
-        address inch = address(0x111111125434b319222CdBf8C261674aDB56F3ae);
         IERC20 weth = IERC20(0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2);
 
+        (   address _swapaddress,
+            bytes memory _calldata
+        ) = abi.decode(_params, (address, bytes));
+
         // 2. Swap _asset to WETH
-        IERC20(_asset).safeApprove(inch, _amountBorrowed);
-        (bool success, ) = inch.call(_inchdata);
-        require(success, "1inch call failed");
+        IERC20(_asset).safeApprove(_swapaddress, _amountBorrowed);
+        (bool success, ) = _swapaddress.call(_calldata);
+        require(success, "Swap call failed");
 
         uint256 wethBalance = weth.balanceOf(address(this));
         // 3. Deposit all weth into Aave
-        deposit(address(weth), wethBalance);
+        this.deposit(address(weth), wethBalance);
 
         // 4. Borrow enough _asset to buy back
-        borrow(_asset, _amountPayback);
+        this.borrow(_asset, _amountPayback);
     }
 
     function LENDING_POOL() public view override returns (ILendingPool) {
@@ -305,4 +310,5 @@ contract HushLender is IHushLender, IFlashLoanReceiver {
     {
         return dataProvider.ADDRESSES_PROVIDER();
     }
+
 }
