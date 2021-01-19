@@ -1,6 +1,6 @@
 import { task } from "hardhat/config"
 import "@nomiclabs/hardhat-waffle";
-import {HardhatUserConfig} from "hardhat/config";
+import { HardhatUserConfig } from "hardhat/config";
 
 // This is a sample Hardhat task. To learn how to create your own go to
 // https://hardhat.org/guides/create-task.html
@@ -34,11 +34,14 @@ module.exports = {
 	},
 	networks: {
 		hardhat: {
-		  forking: {
-			url: "https://mainnet.infura.io/v3/e76402c868ca42f0a2871cb64b9eb0ca"
-		  }
+			forking: {
+				url: "https://mainnet.infura.io/v3/e76402c868ca42f0a2871cb64b9eb0ca"
+			}
 		}
-	  }
+	},
+	mocha: {
+		timeout: 60000
+	}
 };
 
 const config: HardhatUserConfig = {

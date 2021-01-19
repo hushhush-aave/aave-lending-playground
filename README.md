@@ -6,3 +6,8 @@
 2. Deposit Weth into the hushlender
 3. Hushlender deposits weth into Aave and received aWeth
 4. Hushlender withdraws from Aave and transfer funds to owner.
+
+
+
+# TODO:
+- [ ] We need to figure out where we can read our debt when we borrow.
