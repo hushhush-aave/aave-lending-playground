@@ -1,10 +1,8 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
-import {
-	BigNumber,
-	Contract,
-	Signer,
-} from "ethers";
+import { BigNumber, Contract, Signer } from "ethers";
+
+import fetch from "node-fetch";
 
 describe("HushLender", function () {
 	let owner: Signer;
@@ -22,10 +20,33 @@ describe("HushLender", function () {
 		return wei.div("1000000000000000000");
 	};
 
+	async function getInchCalldata(
+		_fromToken: string,
+		_toToken: string,
+		_amount: string,
+		_from: string,
+		_slippage: string
+	) {
+		let url =
+			"https://api.1inch.exchange/v2.0/swap?fromTokenAddress=" +
+			_fromToken +
+			"&toTokenAddress=" +
+			_toToken +
+			"&amount=" +
+			_amount +
+			"&fromAddress=" +
+			_from +
+			"&slippage=" +
+			_slippage +
+			"&disableEstimate=true";
+		const response = await fetch(url);
+		const json = await response.json();
+		return json["tx"]["data"];
+	}
+
 	beforeEach(async function () {
 		[owner, other] = await ethers.getSigners();
 
-		// We need weth
 		wethERC20 = await ethers.getContractAt(
 			"IERC20",
 			"0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2",
@@ -115,7 +136,7 @@ describe("HushLender", function () {
 		expect(daiDebt2["stableDebt"]).to.above(0);
 	});
 
-	it("Flashloan -> leveraged eth position", async function () {
+	it("Flashloan -> leveraged eth position with uniswap", async function () {
 		let uniV2router = await ethers.getContractAt(
 			"IRouter02",
 			"0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D",
@@ -149,18 +170,18 @@ describe("HushLender", function () {
 		let block = await ethers.provider.getBlock(blocknumber);
 		let deadline = block.timestamp + 6000;
 
-        // Generate calldata for uniswap trade
+		// Generate calldata for uniswap trade
 		let populated = await uniV2router.populateTransaction.swapExactTokensForTokens(
 			borrowamount,
-			"0",
+			"0", // allows 100% slippage. Just for testing so we see if it is working. Dont do this in production.
 			path,
 			hushlender.address,
 			deadline
 		);
 		let calldata = populated.data;
 		// https://api.1inch.exchange/v2.0/swap?fromTokenAddress=0x6b175474e89094c44da98b954eedeac495271d0f&toTokenAddress=0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2&amount=200000000000000000000&fromAddress=0x52bc44d5378309ee2abf1539bf71de1b7d7be3b5&slippage=1
-        
-        // Encode calldata for `hushlender`.
+
+		// Encode calldata for `hushlender`.
 		let abiCoder = ethers.utils.defaultAbiCoder;
 		let extendedCalldata = abiCoder.encode(
 			["address", "bytes"],
@@ -194,11 +215,78 @@ describe("HushLender", function () {
 		// Post flashloan + levarage
 		let balDebtPost = await hushlender.getBalancesAndDebt(dai.address);
 		expect(balDebtPost["balance"]).to.equal(0); // aDai
-		expect(balDebtPost["stableDebt"]).to.above(getWei("2000")); // stable debt Dai
+		let owns = borrowamount.mul(BigNumber.from("10009")).div(BigNumber.from("10000")); // borrowed + fee
+		expect(balDebtPost["stableDebt"]).to.equal(owns); // stable debt Dai
 		expect(balDebtPost["variableDebt"]).to.equal(0); // variable debt Dai
 
 		expect(await hushlender.getAtokenBalance(weth.address)).to.above(
-			getWei("2")
+			getWei("2") // Sensitive to current price
+		);
+		expect(await wethERC20.balanceOf(hushlender.address)).to.equal(0);
+	});
+
+	it("Flashloan -> leveraged eth position with 1inch", async function () {
+		// Reset WETH balance
+		let curBal = await wethERC20.balanceOf(await owner.getAddress());
+		await wethERC20.transfer(await other.getAddress(), curBal);
+		expect(await wethERC20.balanceOf(await owner.getAddress())).to.equal(0);
+
+		// Fund hushlender with 1 weth
+		await weth.deposit({ value: getWei("1") });
+		expect(await wethERC20.balanceOf(await owner.getAddress())).to.equal(
+			getWei("1")
+		);
+		await wethERC20.transfer(hushlender.address, getWei("1"));
+		expect(await wethERC20.balanceOf(hushlender.address)).to.equal(
+			getWei("1")
+		);
+
+		// Time to make the flashloan + swap
+		// We will make a swap with Uniswap as I had some issues with 1inch api as we have no funds yet.
+		// Note that the `hushlender` takes an address and calldata, so you can just swap it for 1inch here, no need to change the contract.
+
+		let inchAddress: string = "0x111111125434b319222cdbf8c261674adb56f3ae";
+		let asset = dai.address;
+		let borrowamount: BigNumber = getWei("2000"); // 2000 dai
+
+		let calldata = await getInchCalldata(
+			asset,
+			weth.address,
+			borrowamount.toString(),
+			hushlender.address,
+			"5" // slippage
+		);
+
+		// Encode calldata for `hushlender`.
+		let abiCoder = ethers.utils.defaultAbiCoder;
+		let extendedCalldata = abiCoder.encode(
+			["address", "bytes"],
+			[inchAddress, calldata]
+		);
+
+		// Pre flashloan + leverage
+		let balDebtPre = await hushlender.getBalancesAndDebt(dai.address);
+		expect(balDebtPre["balance"]).to.equal(0); //aDai
+		expect(balDebtPre["stableDebt"]).to.equal(0); //stable debt Dai
+		expect(balDebtPre["variableDebt"]).to.equal(0); // variable debt Dai
+
+		expect(await hushlender.getAtokenBalance(weth.address)).to.equal(0);
+		expect(await wethERC20.balanceOf(hushlender.address)).to.equal(
+			getWei("1")
+		);
+
+		// Performing flashloan
+		await hushlender.takeFlashloan(asset, borrowamount, extendedCalldata);
+
+		// Post flashloan + levarage
+		let balDebtPost = await hushlender.getBalancesAndDebt(dai.address);
+		expect(balDebtPost["balance"]).to.equal(0); // aDai
+		let owns = borrowamount.mul(BigNumber.from("10009")).div(BigNumber.from("10000")); // borrowed + fee
+		expect(balDebtPost["stableDebt"]).to.equal(owns); // stable debt Dai
+		expect(balDebtPost["variableDebt"]).to.equal(0); // variable debt Dai
+
+		expect(await hushlender.getAtokenBalance(weth.address)).to.above(
+			getWei("2") // Sensitive to current price
 		);
 		expect(await wethERC20.balanceOf(hushlender.address)).to.equal(0);
 	});

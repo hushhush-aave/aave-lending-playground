@@ -12,7 +12,9 @@ To make it easy to create a leveraged position on Aave, the `HushLender` can uti
 5. Pay back the flashloan + fees with the borrowed DAI
 6. You now have a position on around 2.4 Ether earning interest on Aave (and approx 2K DAI in debt). 
 
-The swap is currently performed at Uniswap hence we had issues receiving a useful response from the 1inch API as the account do not have neither approval nor balance before the flashloan occurs :/. However, as the `HushLender` swaps as seen below, we could just point it to 1inch when that is up and running and compute the matching `_params` bytes.
+
+The swap is implemented such that the caller is to provide `address` and `calldata`. This means that we can use 1inch or uniswap without changing the contract, but simply be changing the `_params` bytes (see below). While this may not be the best solution from a security point of view, it should do for now hence only elevated users can start the flashloan - but look out for injections :eyes:.
+
 ```solidity
     (   address _swapaddress,
         bytes memory _calldata
@@ -23,10 +25,8 @@ The swap is currently performed at Uniswap hence we had issues receiving a usefu
     (bool success, ) = _swapaddress.call(_calldata);
     require(success, "Swap call failed");
 ```
-While this may not be the best solution from a security point of view, it should do for now hence only elevated users can start the flashloan - but look out for injections :eyes:
 
-To get an idea of how the calldata is generated look at the `HushLender-test.ts`. 
-
+The `HushLender` have tests with both 1inch and uniswap as the "swapper" in use. Look at `Hushlender-test.ts` to see how the calldata is generated. 
 
 ## Testing
 To make testing against a forked mainnet easy we provide an infura api key in the configuration `hardhat.config.ts`. Please only use this key to see that the contract work, and replace with your own afterwards. If misused, we will shut down the api-key.
